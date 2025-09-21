@@ -434,6 +434,33 @@ class TestReportSerialization:
             loaded_report = TestReport._from_json(data)
             assert loaded_report.stop - loaded_report.start == approx(report.duration)
 
+    def test_exception_group_with_only_skips(self, pytester: Pytester):
+        """
+        Test that when an ExceptionGroup with only Skipped exceptions is raised in teardown,
+        it is reported as a single skipped test, not as an error.
+        This is a regression test for issue #13537.
+        """
+        pytester.makepyfile(
+            test_it="""
+            import pytest
+            @pytest.fixture
+            def fixA():
+                yield
+                pytest.skip(reason="A")
+            @pytest.fixture
+            def fixB():
+                yield
+                pytest.skip(reason="A")
+            def test_skip(
+                fixA,
+                fixB
+                ):
+                assert True
+            """
+        )
+        result = pytester.runpytest("-vv")
+        result.assert_outcomes(passed=1, skipped=1)
+
 
 class TestHooks:
     """Test that the hooks are working correctly for plugins"""
