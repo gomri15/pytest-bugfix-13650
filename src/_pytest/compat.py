@@ -12,12 +12,17 @@ from inspect import Signature
 import os
 from pathlib import Path
 import sys
+import types
+from types import TracebackType
 from typing import Any
 from typing import Final
 from typing import NoReturn
 
 import py
 
+
+if sys.version_info < (3, 11):
+    from exceptiongroup import BaseExceptionGroup
 
 if sys.version_info >= (3, 14):
     from annotationlib import Format
@@ -311,3 +316,74 @@ def running_on_ci() -> bool:
     # Only enable CI mode if one of these env variables is defined and non-empty.
     env_vars = ["CI", "BUILD_NUMBER"]
     return any(os.environ.get(var) for var in env_vars)
+
+
+# https://peps.python.org/pep-0785/
+# Copied Implementation of PEP 785 for flattening BaseExceptionGroups.
+# Commented-out code is disabled for now as it is unused.
+def leaf_exceptions(
+    exception_group: BaseExceptionGroup,
+    # *,
+    # fix_traceback: bool = True
+) -> list[BaseException]:
+    """
+    Return a flat list of all 'leaf' exceptions.
+
+    If fix_tracebacks is True, each leaf will have the traceback replaced
+    with a composite so that frames attached to intermediate groups are
+    still visible when debugging. Pass fix_tracebacks=False to disable
+    this modification, e.g. if you expect to raise the group unchanged.
+    """
+
+    def _flatten(
+        group: BaseExceptionGroup,
+        # fix_tracebacks: bool,
+        parent_tb: TracebackType | None = None,
+    ) -> list[BaseException]:
+        group_tb = group.__traceback__
+        combined_tb = _combine_tracebacks(parent_tb, group_tb)
+        result = []
+        for exc in group.exceptions:
+            if isinstance(exc, BaseExceptionGroup):
+                result.extend(_flatten(exc, combined_tb))
+            # elif fix_tracebacks:
+            #     tb = _combine_tracebacks(combined_tb, exc.__traceback__)
+            #     result.append(exc.with_traceback(tb))
+            else:
+                result.append(exc)
+        return result
+
+    return _flatten(exception_group)
+
+
+def _combine_tracebacks(
+    tb1: TracebackType | None,
+    tb2: TracebackType | None,
+) -> TracebackType | None:
+    """
+    Combine two tracebacks, putting tb1 frames before tb2 frames.
+
+    If either is None, return the other.
+    """
+    if tb1 is None:
+        return tb2
+    if tb2 is None:
+        return tb1
+
+    # Convert tb1 to a list of frames.
+    frames = []
+    current: TracebackType | None = tb1
+    while current is not None:
+        frames.append((current.tb_frame, current.tb_lasti, current.tb_lineno))
+        current = current.tb_next
+
+    # Create a new traceback starting with tb2.
+    new_tb = tb2
+
+    # Add frames from tb1 to the beginning (in reverse order).
+    for frame, lasti, lineno in reversed(frames):
+        new_tb = types.TracebackType(
+            tb_next=new_tb, tb_frame=frame, tb_lasti=lasti, tb_lineno=lineno
+        )
+
+    return new_tb
